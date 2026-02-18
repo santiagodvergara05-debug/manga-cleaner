@@ -36,8 +36,8 @@ We have successfully decoupled the runtime from unnecessary bloat.
 
 | Original Scan | AI Restored (v3.0.0) |
 | :---: | :---: |
-| ![Before 1](assets/before_1.jpg) | ![After 1](assets/after_1.jpg) |
-| ![Before 2](assets/before_2.jpg) | ![After 2](assets/after_2.jpg) |
+| ![Before 1](assets/before_1.jpg) | ![After 1](assets/after_1.jp) |
+| ![Before 2](assets/before_2.jp) | ![After 2](assets/after_2.jp) |
 
 ---
 
