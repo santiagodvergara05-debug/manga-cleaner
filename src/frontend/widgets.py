@@ -1,66 +1,89 @@
 import os
 from PySide6.QtWidgets import (QListWidget, QListWidgetItem, QWidget, QVBoxLayout, 
-                             QPushButton, QLabel, QFrame, QSlider)
+                             QPushButton, QLabel, QFrame, QSlider, QHBoxLayout)
 from PySide6.QtCore import Qt, Signal
+from src.utils.config import Config
 
-#////////////////////////#
-#   UI COMPONENT LIBRARY #
-#////////////////////////#
+#/////////////////////////////////#
+#     STUDIO COMPONENT LIBRARY    #
+#/////////////////////////////////#
 
 class FileListWidget(QListWidget):
     def __init__(self):
         super().__init__()
-        
+        self.setStyleSheet(f"background: {Config.COLOR_PANEL}; border: none;")
+
     def add_file(self, full_path: str):
-        filename = os.path.basename(full_path)
-        item = QListWidgetItem(filename)
+        item = QListWidgetItem(os.path.basename(full_path))
         item.setData(Qt.UserRole, full_path)
         self.addItem(item)
 
 class ToolGroup(QFrame):
-    def __init__(self, title: str, button_configs: list):
+    def __init__(self, title, button_configs):
         super().__init__()
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(5, 10, 5, 10)
+        lay.setContentsMargins(5, 5, 5, 5)
+        lay.setSpacing(4)
         
-        header = QLabel(title.upper())
-        header.setStyleSheet("color: #555; font-size: 10px; font-weight: bold;")
-        lay.addWidget(header)
+        lbl = QLabel(title.upper())
+        lbl.setStyleSheet(f"color: {Config.COLOR_TEXT_DIM}; font-size: 9px; font-weight: bold;")
+        lay.addWidget(lbl)
         
         self.buttons = {}
-        for btn_name in button_configs:
-            btn = QPushButton(btn_name)
-            if btn_name in ["MOVE SCREEN", "PAINT MASK", "ERASE MASK"]:
+        checkable = ["MOVE", "BRUSH", "RECT", "LASSO"]
+        
+        for name in button_configs:
+            btn = QPushButton(name)
+            if name in checkable: 
                 btn.setCheckable(True)
-            self.buttons[btn_name] = btn
+                btn.setAutoExclusive(True) 
+            self.buttons[name] = btn
             lay.addWidget(btn)
 
+class HardwareMonitor(QFrame):
+    def __init__(self):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 0, 10, 0)
+        
+        self.lbl = QLabel("SYSTEM IDLE")
+        self.lbl.setStyleSheet(f"color: {Config.COLOR_ACCENT}; font-weight: bold; font-size: 10px;")
+        
+        self.bar = QSlider(Qt.Horizontal)
+        self.bar.setRange(0, 100)
+        self.bar.setFixedWidth(100)
+        self.bar.setEnabled(False)
+        
+        lay.addWidget(self.lbl)
+        lay.addWidget(self.bar)
+
 class BrushSlider(QWidget):
-    def __init__(self, label, default=40, minimum=1, maximum=200, callback=None, is_tile=False):
+    def __init__(self, label, default, minimum, maximum, callback=None, is_tile=False):
         super().__init__()
         self.is_tile = is_tile
         self.base_label = label
-        
         lay = QVBoxLayout(self)
-        self.label_display = QLabel("")
-        self.label_display.setStyleSheet("color: #888; font-size: 10px;")
+        
+        self.display = QLabel("")
+        self.display.setStyleSheet(f"color: {Config.COLOR_TEXT_DIM}; font-size: 10px;")
         
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(minimum, maximum)
-        self.slider.setValue(default)
-        
-        self.update_text(default)
-        self.slider.valueChanged.connect(self.update_text)
-        
-        if callback:
-            self.slider.valueChanged.connect(callback)
-            
-        lay.addWidget(self.label_display)
-        lay.addWidget(self.slider)
-
-    def update_text(self, val: int):
-        if self.is_tile:
-            txt = "Full Image" if val == 1 else f"{val} Vertical Tiles"
-            self.label_display.setText(f"{self.base_label}: {txt}")
+        if is_tile:
+            self.slider.setRange(1, 8) 
+            self.slider.setValue(default // 512)
         else:
-            self.label_display.setText(f"{self.base_label}: {val}px")
+            self.slider.setRange(minimum, maximum)
+            self.slider.setValue(default)
+            
+        self.slider.valueChanged.connect(self.update_text)
+        if callback: self.slider.valueChanged.connect(callback)
+            
+        lay.addWidget(self.display)
+        lay.addWidget(self.slider)
+        self.update_text(self.slider.value())
+
+    def update_text(self, val):
+        if self.is_tile:
+            self.display.setText(f"{self.base_label}: {val * 512}px")
+        else:
+            self.display.setText(f"{self.base_label}: {val}px")

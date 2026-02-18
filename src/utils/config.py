@@ -1,22 +1,44 @@
-#////////////////////////#
-#   GLOBAL CONFIGURATION #
-#////////////////////////#
+import json
+import os
+from src.utils.paths import Paths
+
+#/////////////////////////////////#
+#    GLOBAL STUDIO CONFIGURATION  #
+#/////////////////////////////////#
 
 class Config:
-    APP_NAME = "TITAN MANGA CLEANER"
-    VERSION = "2.0.0"
+    APP_NAME = "Manga-cleaner"
+    VERSION = "2.1.0"
+
+    # Deep Obsidian Theme
+    COLOR_BG = "#0b0b0e"
+    COLOR_PANEL = "#121217"
+    COLOR_ACCENT = "#00d4ff" 
+    COLOR_TEXT = "#e0e0e0"
+    COLOR_TEXT_DIM = "#808085"
+    COLOR_ERROR = "#ff4d4d"
     
     DEFAULT_BRUSH_SIZE = 40
-    BRUSH_MIN = 1
-    BRUSH_MAX = 300
-    
-    TILE_SIZE = 1024
-    TILE_OVERLAP = 64
-    VRAM_SAFETY_THRESHOLD = 0.9
-    
-    VRAM_MONITOR_MS = 2000
-    MAX_UNDO_STEPS = 20
-    
-    THEME_ACCENT = "#00d4ff"
-    THEME_BG = "#0f0f12"
-    THEME_PANEL = "#16161d"
+    MAX_HISTORY = 20
+    DEFAULT_TILE_WIDTH = 1024 
+
+    _ID_FILE = os.path.join(Paths.CACHE, "batch_id.json")
+
+    @staticmethod
+    def get_next_batch_id():
+        current_id = 1
+        if os.path.exists(Config._ID_FILE):
+            try:
+                with open(Config._ID_FILE, 'r') as f:
+                    data = json.load(f)
+                    current_id = data.get("last_id", 0) + 1
+            except:
+                pass
+        
+        if current_id > 65535:
+            current_id = 1
+            
+        with open(Config._ID_FILE, 'w') as f:
+            json.dump({"last_id": current_id}, f)
+            
+        return f"batch_{current_id:05d}"

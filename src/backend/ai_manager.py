@@ -1,31 +1,57 @@
-import torch
-import easyocr
-from simple_lama_inpainting import SimpleLama
-from typing import List
+import os
+import gc
+from src.backend.onnx_engine import ONNXEngine
+from src.utils.paths import Paths
+from src.utils.logger import logger
 
-#////////////////////////#
-#   MODEL RESOURCE MGMT  #
-#////////////////////////#
+#/////////////////////////////////#
+#     AI MODEL RESOURCE MGMT      #
+#/////////////////////////////////#
 
 class AIManager:
-    _ocr_reader = None
-    _lama_model = None
-    _current_langs = []
+    _ocr_engine = None
+    _lama_engine = None
+    _persistent_mode = False
 
     @staticmethod
-    def get_ocr(langs: List[str] = ['en']):
-        if AIManager._ocr_reader is None or set(langs) != set(AIManager._current_langs):
-            AIManager._ocr_reader = easyocr.Reader(langs, gpu=torch.cuda.is_available())
-            AIManager._current_langs = langs
-        return AIManager._ocr_reader
+    def set_persistence(enabled: bool):
+        AIManager._persistent_mode = enabled
+        if not enabled:
+            AIManager.flush()
+
+    @staticmethod
+    def get_ocr():
+        if not AIManager._persistent_mode:
+            if AIManager._lama_engine is not None:
+                AIManager._lama_engine = None
+                gc.collect()
+
+        if AIManager._ocr_engine is None:
+            path = Paths.get_model("ocr.onnx")
+            if os.path.exists(path):
+                AIManager._ocr_engine = ONNXEngine(path)
+            else:
+                logger.error(f"[X] OCR Model Missing: {path}")
+        return AIManager._ocr_engine
 
     @staticmethod
     def get_lama():
-        if AIManager._lama_model is None:
-            AIManager._lama_model = SimpleLama()
-        return AIManager._lama_model
-    
+        if not AIManager._persistent_mode:
+            if AIManager._ocr_engine is not None:
+                AIManager._ocr_engine = None
+                gc.collect()
+
+        if AIManager._lama_engine is None:
+            path = Paths.get_model("lama.onnx")
+            if os.path.exists(path):
+                AIManager._lama_engine = ONNXEngine(path)
+            else:
+                logger.error(f"[X] LaMa Model Missing: {path}")
+        return AIManager._lama_engine
+
     @staticmethod
-    def flush_vram():
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    def flush():
+        AIManager._ocr_engine = None
+        AIManager._lama_engine = None
+        gc.collect()
+        logger.info("[i] VRAM Flushed: Model Memory Released")

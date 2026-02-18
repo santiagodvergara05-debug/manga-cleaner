@@ -4,62 +4,61 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, qInstallMessageHandler
 from src.frontend.main_window import MainWindow
-from src.utils.logger import setup_logger
+from src.utils.logger import logger
+from src.utils.paths import Paths
+from src.utils.config import Config
 
-#////////////////////////#
-#  QT MESSAGE FILTER     #
-#////////////////////////#
+#/////////////////////////////////#
+#      QT MESSAGE FILTER          #
+#/////////////////////////////////#
 
 def qt_message_handler(mode, context, message):
-    """
-    Intercepts C++ level engine warnings. 
-    Filters out persistent DPI/Font calculation noise.
-    """
-    # List of "noise" strings to ignore
-    noise = [
-        "setPointSize", 
-        "Point size <= 0", 
-        "setPointSizeF"
-    ]
-    if any(n in message for n in noise):
-        return # Ignore this message
-    
-    # Otherwise, let the message pass through (or ignore all warnings if preferred)
-    if "Warning" in str(mode):
-        return
+    noise = ["setPointSize", "Point size <= 0", "setPointSizeF"]
+    if any(n in message for n in noise): return 
+    if "Warning" in str(mode): return
 
-#////////////////////////#
-#    APP ENTRY POINT     #
-#////////////////////////#
+#/////////////////////////////////#
+#      STUDIO ENTRY POINT         #
+#/////////////////////////////////#
 
 def main():
-    # Install the filter BEFORE creating the QApplication
+    # 0. Hidden Console Fix
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
+    # 1. Initialize System Paths
+    Paths.initialize()
+    
+    # 2. Setup Logging & Filters
     qInstallMessageHandler(qt_message_handler)
-
+    
+    # 3. Initialize App
     app = QApplication(sys.argv)
-    
-    # Set a robust default font
     app.setFont(QFont("Segoe UI", 9))
-    app.setApplicationName("Titan Manga Cleaner")
+    app.setApplicationName(Config.APP_NAME)
     
-    # Load diagnostic services
-    logger = setup_logger()
-    logger.info("Titan Studio Initializing...")
+    logger.info(f"--- {Config.APP_NAME.upper()} STARTUP ---")
 
-    # Load UI Styles
+    # 4. Inject Theme Styles
     qss_path = os.path.join("src", "frontend", "styles.qss")
     if os.path.exists(qss_path):
         try:
             with open(qss_path, "r") as f:
                 app.setStyleSheet(f.read())
         except Exception as e:
-            logger.error(f"Failed to load QSS: {e}")
+            logger.error(f"Styles Load Failed: {e}")
     
-    # Launch Main Studio
-    window = MainWindow()
-    window.show()
-    
-    sys.exit(app.exec())
+    # 5. Launch Main Studio
+    try:
+        window = MainWindow()
+        window.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        logger.critical(f"FATAL SYSTEM CRASH: {e}", exc_info=True)
+    finally:
+        logger.info(f"--- {Config.APP_NAME.upper()} SHUTDOWN ---")
 
 if __name__ == "__main__":
     main()

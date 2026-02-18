@@ -1,115 +1,96 @@
-import numpy as np
 import cv2
-import torch
-from PIL import Image
-from typing import Tuple, List, Optional
+import numpy as np
 from src.backend.ai_manager import AIManager
+from src.utils.logger import logger
 
-#////////////////////////#
-#   AI TILING ENGINE     #
-#////////////////////////#
+#/////////////////////////////////#
+#    DYNAMIC ROI CLEANING ENGINE  #
+#/////////////////////////////////#
 
 class ImageProcessor:
     @staticmethod
-    def run_ocr_logic(cv_img: np.ndarray, langs: List[str]) -> np.ndarray:
-        if cv_img is None:
-            return np.array([])
+    def run_ocr_logic(cv_img, language="ENG"):
+        engine = AIManager.get_ocr()
+        if not engine: return np.zeros(cv_img.shape[:2], dtype=np.uint8)
 
-        if len(cv_img.shape) == 3:
-            gray = cv2.cvtColor(cv_img, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = cv_img
-
-        enhanced = cv2.equalizeHist(gray)
-        reader = AIManager.get_ocr(langs)
+        h, w = cv_img.shape[:2]
+        ph, pw = ((h + 31) // 32 * 32), ((w + 31) // 32 * 32)
+        pad_h, pad_w = ph - h, pw - w
         
-        results = reader.readtext(enhanced, paragraph=False)
+        padded = cv2.copyMakeBorder(cv_img, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=[0,0,0])
+        img_data = padded.astype(np.float32) / 255.0
+        img_data = np.transpose(img_data, (2, 0, 1))[np.newaxis, :]
+
+        outputs = engine.run(img_data)
+        heatmap = outputs[0][0][0]
+        heatmap = heatmap[0:h, 0:w]
         
-        h, w = gray.shape[:2]
-        mask = np.zeros((h, w), dtype=np.uint8)
-
-        for (bbox, text, prob) in results:
-            if prob < 0.15: 
-                continue
-            pts = np.array(bbox, np.int32)
-            cv2.fillPoly(mask, [pts], 255)
-
-        if np.any(mask):
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
-            mask = cv2.dilate(mask, kernel, iterations=2)
-            
+        mask = (heatmap > 0.3).astype(np.uint8) * 255
+        
+        #/////////////////////////////////#
+        #     4% DYNAMIC MASK DILATION    #
+        #/////////////////////////////////#
+        k_size = max(11, int(w * 0.04)) 
+        if k_size % 2 == 0: k_size += 1
+        
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+        mask = cv2.dilate(mask, kernel, iterations=2)
+        
+        logger.info(f"[+] OCR Mask Ready: {k_size}px (3% expansion)")
         return mask
 
     @staticmethod
-    def run_clean_logic(cv_img: np.ndarray, mask_img: np.ndarray, num_tiles: int) -> Tuple[np.ndarray, List]:
-        #////////////////////////#
-        #  VRAM & TILE PREP      #
-        #////////////////////////#
-        lama = AIManager.get_lama()
+    def run_clean_logic(cv_img, mask_img, max_tile_size, progress_callback=None):
+        engine = AIManager.get_lama()
+        if not engine: return cv_img, []
+
         h, w = cv_img.shape[:2]
-        
-        if h > 3000 and num_tiles < 2:
-            num_tiles = 2
-
-        _, mask_solid = cv2.threshold(mask_img, 10, 255, cv2.THRESH_BINARY)
-        
-        tile_h = (h // num_tiles) + 1
-        overlap = 64
         output = cv_img.copy().astype(np.float32)
-        history_patches = []
+        history = []
 
-        if len(cv_img.shape) == 2:
-            cv_img_rgb = cv2.cvtColor(cv_img, cv2.COLOR_GRAY2RGB)
-        else:
-            cv_img_rgb = cv_img
+        _, labels, stats, _ = cv2.connectedComponentsWithStats(mask_img, connectivity=8)
+        blobs = [stats[i] for i in range(1, len(stats)) if stats[i, 4] > 5]
+        
+        total = len(blobs)
+        processed_mask = np.zeros_like(mask_img)
+        
+        for idx, blob in enumerate(sorted(blobs, key=lambda x: x[4], reverse=True)):
+            bx, by, bw, bh, _ = blob
+            if np.all(processed_mask[by:by+bh, bx:bx+bw] == 255): continue
 
-        #////////////////////////#
-        #  CORE TILING LOOP      #
-        #////////////////////////#
-        for i in range(num_tiles):
-            y_start = i * (h // num_tiles)
-            y_end = h if i == num_tiles - 1 else (i + 1) * (h // num_tiles)
-            
-            y1_crop = max(0, y_start - overlap)
-            y2_crop = min(h, y_end + overlap)
-            
-            tile_mask = mask_solid[y1_crop:y2_crop, :]
-            
-            if not np.any(tile_mask > 0):
-                continue
-            
-            history_patches.append((y_start, y_end, cv_img[y_start:y_end, :].copy()))
-            
-            img_tile = cv_img_rgb[y1_crop:y2_crop, :]
-            
-            res_pil = lama(Image.fromarray(img_tile), Image.fromarray(tile_mask).convert('L'))
-            res_np = np.array(res_pil).astype(np.float32)
+            cx, cy = bx + bw//2, by + bh//2
+            x1 = max(0, cx - max_tile_size//2)
+            y1 = max(0, cy - max_tile_size//2)
+            x2 = min(w, x1 + max_tile_size)
+            y2 = min(h, y1 + max_tile_size)
+            x1 = max(0, x2 - max_tile_size)
+            y1 = max(0, y2 - max_tile_size)
 
-            if res_np.shape[:2] != img_tile.shape[:2]:
-                res_np = cv2.resize(res_np, (img_tile.shape[1], img_tile.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+            tile_img = cv_img[y1:y2, x1:x2]
+            tile_mask = mask_img[y1:y2, x1:x2]
+            th, tw = tile_img.shape[:2]
 
-            if len(cv_img.shape) == 2:
-                res_np = cv2.cvtColor(res_np.astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)
-
-            #////////////////////////#
-            # GAUSSIAN SEAM BLENDING #
-            #////////////////////////#
-            tile_full_h = y2_crop - y1_crop
-            weight_mask = np.ones((tile_full_h, w), dtype=np.float32)
+            #/////////////////////////////////#
+            #     SNAP-TO-8 PADDING LOGIC     #
+            #/////////////////////////////////#
+            ph, pw = ((th + 7) // 8 * 8), ((tw + 7) // 8 * 8)
+            pad_h, pad_w = ph - th, pw - tw
             
-            fade_dist = overlap
-            if y1_crop > 0:
-                for y in range(fade_dist):
-                    weight_mask[y, :] *= (y / fade_dist)
-            if y2_crop < h:
-                for y in range(fade_dist):
-                    weight_mask[-(y+1), :] *= (y / fade_dist)
-
-            if len(cv_img.shape) == 3:
-                weight_mask = np.expand_dims(weight_mask, axis=-1)
-
-            target_slice = output[y1_crop:y2_crop, :]
-            blended = (res_np * weight_mask) + (target_slice * (1.0 - weight_mask))
-            output[y1_crop:y2_crop, :] = blended
+            inp_img = cv2.copyMakeBorder(tile_img, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
+            inp_img = inp_img.astype(np.float32) / 255.0
+            inp_img = np.transpose(inp_img, (2, 0, 1))[np.newaxis, :]
             
-        return np.clip(output, 0, 255).astype(np.uint8), history_patches
+            inp_mask = cv2.copyMakeBorder(tile_mask, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
+            inp_mask = (inp_mask > 127).astype(np.float32)[np.newaxis, np.newaxis, :]
+
+            res = engine.run({'image': inp_img, 'mask': inp_mask})[0][0]
+            res = np.clip(np.transpose(res, (1, 2, 0)) * 255, 0, 255).astype(np.uint8)
+            res = res[0:th, 0:tw]
+
+            history.append((x1, y1, output[y1:y2, x1:x2].copy().astype(np.uint8)))
+            output[y1:y2, x1:x2] = res.astype(np.float32)
+            processed_mask[y1:y2, x1:x2] = 255
+
+            if progress_callback: progress_callback(int((idx/total)*100))
+
+        return output.astype(np.uint8), history
